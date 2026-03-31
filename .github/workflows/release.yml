@@ -1,0 +1,99 @@
+name: Release APK
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Make Gradle executable
+        run: chmod +x gradlew
+
+      - name: Read version metadata
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION_NAME="$(grep '^IL2FUSION_VERSION_NAME=' gradle.properties | cut -d'=' -f2)"
+          VERSION_CODE="$(grep '^IL2FUSION_VERSION_CODE=' gradle.properties | cut -d'=' -f2)"
+          if [ "$REF_TYPE" = "tag" ]; then
+            TAG_NAME="$REF_NAME"
+          else
+            TAG_NAME="v$VERSION_NAME"
+          fi
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "release_name=il2Fusion $VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "asset_name=il2Fusion-${VERSION_NAME}-arm64-v8a-release.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        run: ./gradlew :app:assembleRelease
+
+      - name: Sign APK for GitHub Release
+        env:
+          ASSET_NAME: ${{ steps.version.outputs.asset_name }}
+        run: |
+          UNSIGNED_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
+          ALIGNED_APK="$RUNNER_TEMP/app-release-aligned.apk"
+          SIGNED_APK="$RUNNER_TEMP/$ASSET_NAME"
+          KEYSTORE_PATH="$RUNNER_TEMP/il2fusion-ci.keystore"
+          ZIPALIGN="$(find "$ANDROID_HOME/build-tools" -name zipalign | sort | tail -n 1)"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort | tail -n 1)"
+
+          keytool -genkeypair \
+            -keystore "$KEYSTORE_PATH" \
+            -storepass android \
+            -keypass android \
+            -alias il2fusion-ci \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=il2Fusion CI,O=il2Fusion,C=US"
+
+          "$ZIPALIGN" -f -p 4 "$UNSIGNED_APK" "$ALIGNED_APK"
+          "$APKSIGNER" sign \
+            --ks "$KEYSTORE_PATH" \
+            --ks-key-alias il2fusion-ci \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out "$SIGNED_APK" \
+            "$ALIGNED_APK"
+          "$APKSIGNER" verify "$SIGNED_APK"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+          RELEASE_NAME: ${{ steps.version.outputs.release_name }}
+          ASSET_NAME: ${{ steps.version.outputs.asset_name }}
+        run: |
+          ASSET_PATH="$RUNNER_TEMP/$ASSET_NAME"
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" "$ASSET_PATH" --clobber
+          else
+            gh release create "$TAG_NAME" "$ASSET_PATH" \
+              --title "$RELEASE_NAME" \
+              --generate-notes
+          fi

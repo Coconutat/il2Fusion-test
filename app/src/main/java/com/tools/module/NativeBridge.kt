@@ -24,6 +24,8 @@ object NativeBridge {
     }
 
     @JvmStatic external fun init(processName: String)
+    @JvmStatic external fun setHookFramework(framework: Int)
+    @JvmStatic external fun setTargetsJson(json: String)
     @JvmStatic external fun setTargets(targets: Array<String>)
     @JvmStatic external fun startDump(dataDir: String)
 }

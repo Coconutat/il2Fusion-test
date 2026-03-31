@@ -18,9 +18,10 @@
 #include "../../il2CppDumper/il2cpp-tabledefs.h"
 #include "../../il2CppDumper/xdl/include/xdl.h"
 #include "../../utils/db.h"
+#include "../../utils/hook_backend.h"
 #include "../../utils/log.h"
 #include "../../utils/utils.h"
-#include "dobby.h"
+#include "unity_translation_store.h"
 
 namespace text_extractor {
 namespace {
@@ -35,6 +36,7 @@ struct HookedMethod {
     uintptr_t entry = 0;
     SetterFn original = nullptr;
     bool active = false;
+    hook_backend::Backend backend = hook_backend::Backend::kAnd64InlineHook;
 };
 
 std::mutex g_hook_mutex;
@@ -46,6 +48,7 @@ std::atomic_bool g_worker_started{false};
 std::atomic_bool g_il2cpp_ready{false};
 std::atomic_bool g_api_initialized{false};
 std::atomic_bool g_dobby_mode_configured{false};
+std::atomic<uintptr_t> g_il2cpp_base{0};
 il2cpputils::Il2CppApi g_api{};
 
 bool EnsureIl2cppApi() {
@@ -110,13 +113,37 @@ bool ResolveMethod(const il2cpputils::TargetSpec& spec, il2cpputils::ResolvedMet
     return true;
 }
 
-void ProcessCapturedText(const HookedMethod& method, textutils::Il2CppString* value) {
-    if (value == nullptr) {
+bool IsInvalidManagedText(const std::string& text) {
+    if (text == "<null>" || text.rfind("<length=", 0) == 0 || text.empty()) {
+        return true;
+    }
+    return false;
+}
+
+void NormalizeUnityLookupText(std::string* text) {
+    if (text == nullptr || text->empty()) {
         return;
     }
 
-    const auto original = textutils::DescribeIl2CppString(value);
-    if (original == "<null>" || original.rfind("<length=", 0) == 0 || original.empty()) {
+    constexpr const char* kNbspUtf8 = "\xC2\xA0";
+    size_t offset = 0;
+    while ((offset = text->find(kNbspUtf8, offset)) != std::string::npos) {
+        text->replace(offset, 2, " ");
+        ++offset;
+    }
+}
+
+std::string ExtractManagedText(textutils::Il2CppString* value) {
+    if (value == nullptr) {
+        return {};
+    }
+    std::string original = textutils::DescribeIl2CppString(value);
+    NormalizeUnityLookupText(&original);
+    return original;
+}
+
+void RecordCapturedText(const HookedMethod& method, const std::string& original) {
+    if (IsInvalidManagedText(original)) {
         return;
     }
 
@@ -130,11 +157,44 @@ void ProcessCapturedText(const HookedMethod& method, textutils::Il2CppString* va
     textdb::InsertIfNeeded(original);
 }
 
+bool TryApplyTranslation(const HookedMethod& method,
+                         const std::string& original,
+                         textutils::Il2CppString** value) {
+    if (value == nullptr || *value == nullptr || IsInvalidManagedText(original)) {
+        return false;
+    }
+    if (g_api.string_new == nullptr) {
+        return false;
+    }
+
+    unity_translation_store::TranslationEntry translated;
+    if (!unity_translation_store::LookupTranslation(original, &translated) ||
+        translated.translation.empty()) {
+        return false;
+    }
+
+    auto* replacement = reinterpret_cast<textutils::Il2CppString*>(
+        g_api.string_new(translated.translation.c_str()));
+    if (replacement == nullptr) {
+        LOGE("构造翻译字符串失败：%s", method.full.c_str());
+        return false;
+    }
+
+    LOGI("[Setter] %s 命中翻译：#%s# -> #%s#",
+         method.full.c_str(),
+         original.c_str(),
+         translated.translation.c_str());
+    *value = replacement;
+    return true;
+}
+
 template <size_t Slot>
 void SetterReplacement(void* instance, textutils::Il2CppString* value) {
     HookedMethod& method = g_hook_slots[Slot];
     if (method.active) {
-        ProcessCapturedText(method, value);
+        std::string original = ExtractManagedText(value);
+        TryApplyTranslation(method, original, &value);
+        RecordCapturedText(method, original);
     }
 
     SetterFn original = method.original;
@@ -156,6 +216,7 @@ void ResetHookSlotsLocked() {
         slot.original = nullptr;
         slot.entry = 0;
         slot.full.clear();
+        slot.backend = hook_backend::Backend::kAnd64InlineHook;
     }
 }
 
@@ -168,15 +229,41 @@ int FindFreeHookSlotLocked() {
     return -1;
 }
 
-void clear_hooks_locked() {
-    for (void* target : g_installed_targets) {
-        const int ret = DobbyDestroy(target);
-        if (ret != 0) {
-            LOGE("销毁 hook @%p 失败, ret=%d", target, ret);
+bool clear_hooks_locked() {
+    for (const auto& slot : g_hook_slots) {
+        if (slot.active && !hook_backend::SupportsDestroy(slot.backend)) {
+            LOGW("检测到已安装的 %s hook 无法安全卸载，保留现有 hook，仅允许增量安装。若要完整切换请重启目标进程。",
+                 hook_backend::BackendName(slot.backend));
+            return false;
+        }
+    }
+
+    for (const auto& slot : g_hook_slots) {
+        if (!slot.active || slot.entry == 0) {
+            continue;
+        }
+        if (!hook_backend::DestroyInlineHook(reinterpret_cast<void*>(slot.entry), slot.backend)) {
+            LOGE("销毁 hook @%p 失败", reinterpret_cast<void*>(slot.entry));
         }
     }
     g_installed_targets.clear();
     ResetHookSlotsLocked();
+    return true;
+}
+
+bool TryResolveMethodFromJson(const il2cpputils::TargetSpec& spec, uintptr_t* out_entry) {
+    if (out_entry == nullptr) {
+        return false;
+    }
+
+    std::uint64_t rva = 0;
+    const uintptr_t base = g_il2cpp_base.load();
+    if (base == 0 || !unity_translation_store::ResolveTargetAddress(spec.full, &rva) || rva == 0) {
+        return false;
+    }
+
+    *out_entry = base + static_cast<uintptr_t>(rva);
+    return true;
 }
 
 void install_hooks_locked() {
@@ -199,34 +286,48 @@ void install_hooks_locked() {
         return;
     }
 
-    clear_hooks_locked();
+    const auto backend = hook_backend::GetPreferredBackend();
+    const bool cleared_all = clear_hooks_locked();
     std::unordered_map<uintptr_t, std::string> seen_entries;
+    if (!cleared_all) {
+        for (const auto& slot : g_hook_slots) {
+            if (slot.active && slot.entry != 0) {
+                seen_entries.emplace(slot.entry, slot.full);
+            }
+        }
+    }
     size_t success_count = 0;
     size_t skipped_count = 0;
+    size_t duplicate_count = 0;
 
-    if (!g_dobby_mode_configured.exchange(true)) {
+    if (backend == hook_backend::Backend::kDobby && !g_dobby_mode_configured.exchange(true)) {
         dobby_enable_near_branch_trampoline();
     }
 
     for (const auto& spec : g_targets) {
+        uintptr_t resolved_entry = 0;
+        bool resolved_from_json = TryResolveMethodFromJson(spec, &resolved_entry);
         il2cpputils::ResolvedMethod resolved{};
-        if (!ResolveMethod(spec, resolved)) {
-            ++skipped_count;
-            continue;
+        if (!resolved_from_json) {
+            if (!ResolveMethod(spec, resolved)) {
+                ++skipped_count;
+                continue;
+            }
+            resolved_entry = resolved.entry;
         }
 
-        if (!hookutils::IsExecutableAddressInModule(resolved.entry, kLibIl2cpp)) {
+        if (!hookutils::IsExecutableAddressInModule(resolved_entry, kLibIl2cpp)) {
             LOGE("跳过 hook：%s -> 0x%" PRIxPTR " 不在 %s 可执行段内",
-                 spec.full.c_str(), resolved.entry, kLibIl2cpp);
+                 spec.full.c_str(), resolved_entry, kLibIl2cpp);
             ++skipped_count;
             continue;
         }
 
-        auto existing = seen_entries.find(resolved.entry);
+        auto existing = seen_entries.find(resolved_entry);
         if (existing != seen_entries.end()) {
             LOGI("跳过重复入口：%s 与 %s 共用 0x%" PRIxPTR,
-                 spec.full.c_str(), existing->second.c_str(), resolved.entry);
-            ++skipped_count;
+                 spec.full.c_str(), existing->second.c_str(), resolved_entry);
+            ++duplicate_count;
             continue;
         }
 
@@ -237,37 +338,52 @@ void install_hooks_locked() {
             continue;
         }
 
-        void* target = reinterpret_cast<void*>(resolved.entry);
+        void* target = reinterpret_cast<void*>(resolved_entry);
         HookedMethod& hook_slot = g_hook_slots[static_cast<size_t>(slot)];
         hook_slot.full = spec.full;
-        hook_slot.entry = resolved.entry;
+        hook_slot.entry = resolved_entry;
         hook_slot.original = nullptr;
         hook_slot.active = false;
+        hook_slot.backend = backend;
 
-        const int ret = DobbyHook(
+        if (hook_backend::InstallInlineHook(
                 target,
-                reinterpret_cast<dobby_dummy_func_t>(kSetterReplacements[static_cast<size_t>(slot)]),
-                reinterpret_cast<dobby_dummy_func_t*>(&hook_slot.original));
-        if (ret == 0) {
+                reinterpret_cast<void*>(kSetterReplacements[static_cast<size_t>(slot)]),
+                reinterpret_cast<void**>(&hook_slot.original),
+                spec.full.c_str(),
+                backend)) {
             g_installed_targets.push_back(target);
             hook_slot.active = true;
-            seen_entries.emplace(resolved.entry, spec.full);
+            seen_entries.emplace(resolved_entry, spec.full);
             ++success_count;
-            LOGI("Hook 成功: %s @ %p (slot=%d, instance=%d, params=%u, argType=%d, retType=%d)",
+            if (resolved_from_json) {
+                LOGI("Hook 成功: %s @ %p (slot=%d, source=json_rva, backend=%s)",
+                     spec.full.c_str(),
+                     target,
+                     slot,
+                     hook_backend::BackendName(backend));
+            } else {
+                LOGI("Hook 成功: %s @ %p (slot=%d, source=reflection, backend=%s, instance=%d, params=%u, argType=%d, retType=%d)",
                  spec.full.c_str(),
                  target,
                  slot,
+                 hook_backend::BackendName(backend),
                  resolved.is_instance ? 1 : 0,
                  resolved.param_count,
                  resolved.first_param_type,
                  resolved.return_type);
+            }
         } else {
-            LOGE("Hook 失败 %s, ret=%d", spec.full.c_str(), ret);
+            LOGE("Hook 失败 %s, backend=%s", spec.full.c_str(), hook_backend::BackendName(backend));
             hook_slot = HookedMethod{};
             ++skipped_count;
         }
     }
-    LOGI("文本 hook 安装完成：成功 %zu，跳过 %zu", success_count, skipped_count);
+    LOGI("文本 hook 安装完成：backend=%s 成功 %zu，跳过 %zu，重复 %zu",
+         hook_backend::BackendName(backend),
+         success_count,
+         skipped_count,
+         duplicate_count);
 }
 
 void update_targets_internal(const std::vector<std::string>& new_targets) {
@@ -298,6 +414,7 @@ void init_worker() {
     }
 
     LOGI("[%s] %s loaded @ 0x%" PRIxPTR, g_process_name.c_str(), kLibIl2cpp, base);
+    g_il2cpp_base.store(base);
     if (!EnsureIl2cppApi()) {
         return;
     }
@@ -316,6 +433,27 @@ void Init(const std::string& process_name) {
     }
     LOGI("[%s] Text extractor init", g_process_name.c_str());
     std::thread(init_worker).detach();
+}
+
+void SetHookBackend(std::int32_t backend_value) {
+    const auto backend = hook_backend::BackendFromOrdinal(backend_value);
+    {
+        std::lock_guard<std::mutex> _lk(g_hook_mutex);
+        if (!g_installed_targets.empty() && hook_backend::GetPreferredBackend() != backend) {
+            LOGW("检测到运行期切换 backend 到 %s。已安装 hook 不会被热迁移，完整生效需要重启目标进程。",
+                 hook_backend::BackendName(backend));
+        }
+        hook_backend::SetPreferredBackend(backend);
+    }
+}
+
+void UpdateTargetsJson(const std::string& json) {
+    unity_translation_store::UpdateConfigJson(json);
+    LOGI("更新 targets_json，length=%zu", json.size());
+    if (g_il2cpp_ready.load()) {
+        std::lock_guard<std::mutex> _lk(g_hook_mutex);
+        install_hooks_locked();
+    }
 }
 
 void UpdateTargets(const std::vector<std::string>& new_targets) {

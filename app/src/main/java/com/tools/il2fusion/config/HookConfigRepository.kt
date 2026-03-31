@@ -15,7 +15,14 @@ class HookConfigRepository {
     suspend fun loadConfig(context: Context): HookConfigPayload = withContext(Dispatchers.IO) {
         val savedTargets = HookConfigStore.loadTargetsForApp(context)
         val dumpMode = HookConfigStore.loadDumpModeForApp(context)
-        HookConfigPayload(savedTargets, dumpMode)
+        val hookFramework = HookConfigStore.loadHookFrameworkForApp(context)
+        val targetsJson = HookConfigStore.loadTargetsJsonForApp(context)
+        HookConfigPayload(
+            targets = savedTargets,
+            dumpModeEnabled = dumpMode,
+            hookFramework = hookFramework,
+            targetsJson = targetsJson
+        )
     }
 
     /**
@@ -25,11 +32,19 @@ class HookConfigRepository {
         HookConfigStore.saveDumpMode(context, enabled)
     }
 
+    suspend fun saveHookFramework(context: Context, framework: HookFramework) = withContext(Dispatchers.IO) {
+        HookConfigStore.saveHookFramework(context, framework)
+    }
+
     /**
      * Persists the target method list through the content provider.
      */
     suspend fun saveTargets(context: Context, targets: List<String>) = withContext(Dispatchers.IO) {
         HookConfigStore.saveTargets(context, targets)
+    }
+
+    suspend fun saveTargetsJson(context: Context, json: String) = withContext(Dispatchers.IO) {
+        HookConfigStore.saveTargetsJson(context, json)
     }
 }
 
@@ -38,5 +53,7 @@ class HookConfigRepository {
  */
 data class HookConfigPayload(
     val targets: List<String>,
-    val dumpModeEnabled: Boolean
+    val dumpModeEnabled: Boolean,
+    val hookFramework: HookFramework,
+    val targetsJson: String
 )

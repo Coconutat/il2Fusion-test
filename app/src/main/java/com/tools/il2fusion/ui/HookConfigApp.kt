@@ -1,17 +1,21 @@
 package com.tools.il2fusion.ui
 
+import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -19,7 +23,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -69,49 +72,165 @@ fun HookConfigApp(viewModel: HookConfigViewModel = viewModel()) {
 
         Scaffold(
             containerColor = Color.Transparent,
+            topBar = {
+                AppChrome(
+                    state = state,
+                    selectedTab = selectedTab,
+                    tabs = tabs,
+                    onSelect = { selectedTab = it }
+                )
+            },
             snackbarHost = { SnackbarHost(snackbarHostState) }
         ) { inner ->
-            val navWidth = 80.dp
-            Row(
+            ContentHost(
+                selectedTab = selectedTab,
+                state = state,
+                context = context,
+                filePickerLauncher = filePickerLauncher,
+                viewModel = viewModel,
+                focusManagerClear = { focusManager.clearFocus() },
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(inner)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AppChrome(
+    state: HookConfigState,
+    selectedTab: SideTab,
+    tabs: List<SideTab>,
+    onSelect: (SideTab) -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colorScheme.surface.copy(alpha = 0.96f))
+            .statusBarsPadding()
+            .padding(horizontal = 18.dp, vertical = 12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Top
+        ) {
+            Column(
+                modifier = Modifier.weight(1f)
             ) {
-                SideNav(
-                    tabs = tabs,
-                    selected = selectedTab,
-                    onSelect = { selectedTab = it },
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .width(navWidth)
+                Text(
+                    text = "il2Fusion",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
+                    color = colorScheme.onSurface
                 )
-
-                VerticalDivider(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .width(1.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant
+                Text(
+                    text = "Unity 文本拦截工具",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp)
                 )
+            }
+            StatusPill(
+                text = if (state.dumpModeEnabled) "Dump 模式" else state.hookFramework.displayName
+            )
+        }
 
-                Box(
+        TabStrip(
+            tabs = tabs,
+            selected = selectedTab,
+            onSelect = onSelect,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 16.dp)
+        )
+    }
+}
+
+@Composable
+private fun StatusPill(
+    text: String,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+            contentColor = MaterialTheme.colorScheme.primary
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(999.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+        )
+    }
+}
+
+@Composable
+private fun TabStrip(
+    tabs: List<SideTab>,
+    selected: SideTab,
+    onSelect: (SideTab) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(22.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            tabs.forEach { tab ->
+                val selectedTab = tab == selected
+                val containerColor = if (selectedTab) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                } else {
+                    Color.Transparent
+                }
+                val contentColor = if (selectedTab) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                val borderColor = if (selectedTab) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
+                } else {
+                    Color.Transparent
+                }
+                Card(
                     modifier = Modifier
                         .weight(1f)
-                        .padding(horizontal = 12.dp)
-                        .pointerInput(Unit) {
-                            detectTapGestures(onTap = { focusManager.clearFocus() })
-                        }
+                        .heightIn(min = 50.dp)
+                        .padding(horizontal = 3.dp)
+                        .clickable { onSelect(tab) },
+                    colors = CardDefaults.cardColors(
+                        containerColor = containerColor,
+                        contentColor = contentColor
+                    ),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, borderColor),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                 ) {
-                    when (selectedTab) {
-                        SideTab.Overview -> HookOverviewScreen(state = state)
-                        SideTab.Dump -> DumpModeScreen(
-                            state = state,
-                            onDumpModeChanged = { viewModel.onDumpModeChanged(context, it) }
-                        )
-                        SideTab.Parse -> ParseTextScreen(
-                            state = state,
-                            onPickFile = { filePickerLauncher.launch(arrayOf("*/*")) },
-                            onSave = { viewModel.onSave(context) },
-                            modifier = Modifier.fillMaxSize()
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 13.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = tab.title,
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            color = contentColor
                         )
                     }
                 }
@@ -120,71 +239,41 @@ fun HookConfigApp(viewModel: HookConfigViewModel = viewModel()) {
     }
 }
 
-enum class SideTab(val title: String) {
-    Overview("Home"),
-    Dump("Dump"),
-    Parse("Parse")
-}
-
 @Composable
-fun SideNav(
-    tabs: List<SideTab>,
-    selected: SideTab,
-    onSelect: (SideTab) -> Unit,
+private fun ContentHost(
+    selectedTab: SideTab,
+    state: HookConfigState,
+    context: Context,
+    filePickerLauncher: ActivityResultLauncher<Array<String>>,
+    viewModel: HookConfigViewModel,
+    focusManagerClear: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    androidx.compose.foundation.layout.Column(
+    Box(
         modifier = modifier
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f))
-            .padding(horizontal = 6.dp, vertical = 12.dp),
-        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = { focusManagerClear() })
+            }
     ) {
-        tabs.forEach { tab ->
-            SideNavItem(
-                tab = tab,
-                selected = tab == selected,
-                onClick = { onSelect(tab) }
+        when (selectedTab) {
+            SideTab.Overview -> HookOverviewScreen(state = state)
+            SideTab.Dump -> DumpModeScreen(
+                state = state,
+                onDumpModeChanged = { viewModel.onDumpModeChanged(context, it) },
+                onHookFrameworkChanged = { viewModel.onHookFrameworkChanged(context, it) }
+            )
+            SideTab.Parse -> ParseTextScreen(
+                state = state,
+                onPickFile = { filePickerLauncher.launch(arrayOf("*/*")) },
+                onSave = { viewModel.onSave(context) },
+                modifier = Modifier.fillMaxSize()
             )
         }
     }
 }
 
-@Composable
-private fun SideNavItem(
-    tab: SideTab,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    val containerColor = if (selected) {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-    }
-    val contentColor = if (selected) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }
-    Card(
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = containerColor,
-            contentColor = contentColor
-        ),
-        modifier = Modifier
-            .size(52.dp)
-            .clickable(onClick = onClick)
-    ) {
-        androidx.compose.foundation.layout.Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = tab.title,
-                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                color = contentColor
-            )
-        }
-    }
+enum class SideTab(val title: String) {
+    Overview("总览"),
+    Dump("模式"),
+    Parse("解析")
 }

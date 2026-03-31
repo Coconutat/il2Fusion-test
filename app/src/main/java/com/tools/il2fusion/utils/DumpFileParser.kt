@@ -19,6 +19,7 @@ class DumpFileParser {
 
     data class DumpParseResult(
         val entries: List<TargetEntry>,
+        val jsonText: String,
         val savedJsonPath: String?
     )
 
@@ -34,6 +35,7 @@ class DumpFileParser {
         val resolver = context.contentResolver
         val input = resolver.openInputStream(uri) ?: return@withContext DumpParseResult(
             entries = emptyList(),
+            jsonText = "",
             savedJsonPath = null
         )
         val entries = mutableListOf<TargetEntry>()
@@ -42,8 +44,9 @@ class DumpFileParser {
                 parseDumpLines(reader.readLines(), maxCount, entries)
             }
         }
-        val savedPath = saveJsonToDownload(context, entries, sourceName)
-        return@withContext DumpParseResult(entries = entries, savedJsonPath = savedPath)
+        val jsonText = buildTargetsJson(entries)
+        val savedPath = saveJsonToDownload(context, jsonText, sourceName)
+        return@withContext DumpParseResult(entries = entries, jsonText = jsonText, savedJsonPath = savedPath)
     }
 
     private fun parseDumpLines(
@@ -96,22 +99,26 @@ class DumpFileParser {
         return parts.joinToString(".")
     }
 
-    private fun saveJsonToDownload(context: Context, entries: List<TargetEntry>, sourceName: String): String? {
-        if (entries.isEmpty()) return null
-        return try {
-            val root = JSONObject()
-            val array = JSONArray()
-            entries.forEach { entry ->
-                val obj = JSONObject()
-                obj.put("functionName", entry.functionName)
-                obj.put("address", entry.address)
-                array.put(obj)
-            }
-            root.put("targets", array)
+    private fun buildTargetsJson(entries: List<TargetEntry>): String {
+        if (entries.isEmpty()) return ""
+        val root = JSONObject()
+        val array = JSONArray()
+        entries.forEach { entry ->
+            val obj = JSONObject()
+            obj.put("functionName", entry.functionName)
+            obj.put("address", entry.address)
+            array.put(obj)
+        }
+        root.put("targets", array)
+        return root.toString(2)
+    }
 
+    private fun saveJsonToDownload(context: Context, jsonText: String, sourceName: String): String? {
+        if (jsonText.isBlank()) return null
+        return try {
             val destFileName = Utils.buildFileNameFromSource(sourceName, "json")
             val tmpFile = File(context.filesDir, "parsed_targets.json")
-            tmpFile.writeText(root.toString(2))
+            tmpFile.writeText(jsonText)
 
             Utils.moveToDownload(tmpFile, destFileName)
         } catch (t: Throwable) {

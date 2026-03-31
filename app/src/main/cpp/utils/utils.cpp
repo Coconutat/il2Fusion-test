@@ -501,6 +501,7 @@ bool ResolveIl2cppApi(void* handle, Il2CppApi& api) {
     ok &= resolve(api.method_get_param, "il2cpp_method_get_param");
     ok &= resolve(api.method_get_return_type, "il2cpp_method_get_return_type");
     ok &= resolve(api.method_is_instance, "il2cpp_method_is_instance");
+    resolve(api.string_new, "il2cpp_string_new");
     resolve(api.thread_attach, "il2cpp_thread_attach");
     resolve(api.is_vm_thread, "il2cpp_is_vm_thread");
 

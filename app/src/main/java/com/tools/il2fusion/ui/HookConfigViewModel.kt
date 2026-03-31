@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.tools.il2fusion.config.HookFramework
 import com.tools.il2fusion.config.HookConfigRepository
 import com.tools.il2fusion.utils.DumpFileParser
 import com.tools.il2fusion.utils.HookTargetUtils
@@ -41,13 +42,17 @@ class HookConfigViewModel(
                 _state.value = HookConfigState(
                     methodInputs = emptyList(),
                     savedCount = 0,
-                    dumpModeEnabled = payload.dumpModeEnabled
+                    dumpModeEnabled = payload.dumpModeEnabled,
+                    hookFramework = payload.hookFramework,
+                    hasTargetsJson = payload.targetsJson.isNotBlank()
                 )
             } else {
                 _state.value = HookConfigState(
                     methodInputs = HookTargetUtils.formatInputs(payload.targets),
                     savedCount = payload.targets.size,
-                    dumpModeEnabled = payload.dumpModeEnabled
+                    dumpModeEnabled = payload.dumpModeEnabled,
+                    hookFramework = payload.hookFramework,
+                    hasTargetsJson = payload.targetsJson.isNotBlank()
                 )
             }
         }
@@ -61,6 +66,23 @@ class HookConfigViewModel(
             repository.saveDumpMode(context, enabled)
             _state.value = _state.value.copy(dumpModeEnabled = enabled)
             _events.send(HookConfigEvent.ShowMessage(if (enabled) "已切换到 Dump 模式" else "已切换到 文本拦截 模式"))
+        }
+    }
+
+    fun onHookFrameworkChanged(context: Context, useDobby: Boolean) {
+        viewModelScope.launch {
+            val framework = if (useDobby) HookFramework.Dobby else HookFramework.And64InlineHook
+            repository.saveHookFramework(context, framework)
+            _state.value = _state.value.copy(hookFramework = framework)
+            _events.send(
+                HookConfigEvent.ShowMessage(
+                    if (framework == HookFramework.Dobby) {
+                        "Hook 框架已切换到 Dobby"
+                    } else {
+                        "Hook 框架已切换到 And64InlineHook"
+                    }
+                )
+            )
         }
     }
 
@@ -79,10 +101,14 @@ class HookConfigViewModel(
                 val methods = HookTargetUtils.normalizeInputs(result.entries.map { it.functionName })
                 if (methods.isNotEmpty()) {
                     repository.saveTargets(context, methods)
+                    if (result.jsonText.isNotBlank()) {
+                        repository.saveTargetsJson(context, result.jsonText)
+                    }
                     val formatted = HookTargetUtils.formatInputs(methods)
                     _state.value = _state.value.copy(
                         methodInputs = formatted,
-                        savedCount = methods.size
+                        savedCount = methods.size,
+                        hasTargetsJson = result.jsonText.isNotBlank()
                     )
                     _events.send(HookConfigEvent.ShowMessage("解析并保存 ${methods.size} 个 set_text 方法"))
                 } else {
@@ -132,7 +158,9 @@ class HookConfigViewModel(
 data class HookConfigState(
     val methodInputs: List<String> = emptyList(),
     val dumpModeEnabled: Boolean = false,
+    val hookFramework: HookFramework = HookFramework.And64InlineHook,
     val savedCount: Int = 0,
+    val hasTargetsJson: Boolean = false,
     val isLoading: Boolean = false
 )
 

@@ -1,14 +1,12 @@
 package com.tools.module
 
 import android.content.Context
+import com.tools.il2fusion.config.HookFramework
 import com.tools.il2fusion.config.HookConfigStore
 import de.robv.android.xposed.IXposedHookLoadPackage
-import de.robv.android.xposed.IXposedHookZygoteInit
 import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XSharedPreferences
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_InitPackageResources
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
 /**
@@ -77,6 +75,26 @@ class MainHook: IXposedHookLoadPackage {
                         XposedBridge.log("$TAG Native init() failed: $e")
                     }
 
+                    try {
+                        val hookFramework = HookConfigStore.loadHookFrameworkForHook(ctx)
+                        val frameworkValue = when (hookFramework) {
+                            HookFramework.And64InlineHook -> 0
+                            HookFramework.Dobby -> 1
+                        }
+                        NativeBridge.setHookFramework(frameworkValue)
+                        XposedBridge.log("$TAG setHookFramework -> ${hookFramework.storageValue}")
+                    } catch (e: Throwable) {
+                        XposedBridge.log("$TAG setHookFramework failed: $e")
+                    }
+
+                    try {
+                        val targetsJson = HookConfigStore.loadTargetsJsonForHook(ctx)
+                        NativeBridge.setTargetsJson(targetsJson)
+                        XposedBridge.log("$TAG setTargetsJson -> length=${targetsJson.length}")
+                    } catch (e: Throwable) {
+                        XposedBridge.log("$TAG setTargetsJson failed: $e")
+                    }
+
                     val dumpMode = try {
                         HookConfigStore.loadDumpModeForHook(ctx)
                     } catch (e: Throwable) {
@@ -118,6 +136,10 @@ class MainHook: IXposedHookLoadPackage {
             repeat(times) { idx ->
                 try {
                     Thread.sleep(delayMs)
+                    val targetsJson = HookConfigStore.loadTargetsJsonForHook(ctx)
+                    if (targetsJson.isNotBlank()) {
+                        NativeBridge.setTargetsJson(targetsJson)
+                    }
                     val targets = HookConfigStore.loadTargetsForHook(ctx).toTypedArray()
                     if (targets.isNotEmpty()) {
                         NativeBridge.setTargets(targets)

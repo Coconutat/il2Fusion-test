@@ -36,6 +36,22 @@ Java_com_tools_module_NativeBridge_init(JNIEnv* env, jclass /*clazz*/, jstring p
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tools_module_NativeBridge_setHookFramework(JNIEnv* /*env*/, jclass /*clazz*/, jint framework) {
+    text_extractor::SetHookBackend(static_cast<std::int32_t>(framework));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tools_module_NativeBridge_setTargetsJson(JNIEnv* env, jclass /*clazz*/, jstring json) {
+    const char* raw = json != nullptr ? env->GetStringUTFChars(json, nullptr) : nullptr;
+    std::string text;
+    if (raw != nullptr) {
+        text.assign(raw);
+        env->ReleaseStringUTFChars(json, raw);
+    }
+    text_extractor::UpdateTargetsJson(text);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tools_module_NativeBridge_setTargets(JNIEnv* env, jclass /*clazz*/, jobjectArray targets) {
     if (targets == nullptr) {
         return;

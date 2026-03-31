@@ -55,6 +55,7 @@ struct Il2CppApi {
     const Il2CppType* (*method_get_param)(const MethodInfo*, uint32_t);
     const Il2CppType* (*method_get_return_type)(const MethodInfo*);
     bool (*method_is_instance)(const MethodInfo*);
+    void* (*string_new)(const char*);
     bool (*is_vm_thread)(Il2CppThread*);
     void* (*thread_attach)(Il2CppDomain*);
 };

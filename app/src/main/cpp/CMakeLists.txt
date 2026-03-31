@@ -9,6 +9,7 @@ add_library(
         native_hook
         SHARED
         native_hook.cpp
+        config/json_extract.cpp
         il2CppDumper/hack.cpp
         il2CppDumper/il2cpp_dump.cpp
         il2CppDumper/xdl/xdl.c
@@ -18,9 +19,12 @@ add_library(
         il2CppDumper/xdl/xdl_util.c
         plugins/dump/dump.cpp
         plugins/textExtractor/textExtractor.cpp
+        plugins/textExtractor/unity_translation_store.cpp
         utils/db.cpp
+        utils/hook_backend.cpp
         utils/sqlite3.c
         utils/utils.cpp
+        third_party/And64InlineHook/And64InlineHook.cpp
 )
 
 target_include_directories(
