@@ -2,6 +2,7 @@
 #define IL2FUSION_UTILS_H
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -12,6 +13,7 @@ struct Il2CppDomain;
 struct Il2CppAssembly;
 struct Il2CppImage;
 struct Il2CppClass;
+struct Il2CppType;
 struct MethodInfo;
 struct Il2CppThread;
 
@@ -34,6 +36,7 @@ uintptr_t FindModuleBase(const char* name);
 uintptr_t WaitForModule(const char* name, std::chrono::milliseconds timeout);
 std::string FindModulePath(const char* name);
 uintptr_t FindExportInElf(const char* path, const char* symbol, uintptr_t base);
+bool IsExecutableAddressInModule(uintptr_t address, const char* module_name);
 void* GetSecondArg(DobbyRegisterContext* ctx);
 void SetSecondArg(DobbyRegisterContext* ctx, void* value);
 }
@@ -48,6 +51,10 @@ struct Il2CppApi {
     const MethodInfo* (*class_get_methods)(Il2CppClass*, void**);
     const MethodInfo* (*class_get_method_from_name)(Il2CppClass*, const char*, int);
     const char* (*method_get_name)(const MethodInfo*);
+    uint32_t (*method_get_param_count)(const MethodInfo*);
+    const Il2CppType* (*method_get_param)(const MethodInfo*, uint32_t);
+    const Il2CppType* (*method_get_return_type)(const MethodInfo*);
+    bool (*method_is_instance)(const MethodInfo*);
     bool (*is_vm_thread)(Il2CppThread*);
     void* (*thread_attach)(Il2CppDomain*);
 };
@@ -59,6 +66,15 @@ struct TargetSpec {
     std::string method;
 };
 
+struct ResolvedMethod {
+    const MethodInfo* method = nullptr;
+    uintptr_t entry = 0;
+    bool is_instance = false;
+    uint32_t param_count = 0;
+    int first_param_type = -1;
+    int return_type = -1;
+};
+
 // Parses "Namespace.Class.method" into TargetSpec; returns false if format invalid.
 bool ParseTarget(const std::string& full, TargetSpec& out);
 
@@ -68,8 +84,12 @@ bool ResolveIl2cppApi(void* handle, Il2CppApi& api);
 // Waits for VM ready (if is_vm_thread is available) and attaches current thread when possible.
 bool EnsureVmReadyAndAttach(const Il2CppApi& api, int max_retry, std::chrono::milliseconds interval);
 
-// Finds the MethodInfo by namespace/class/method using the provided API.
-const MethodInfo* FindMethodInAssemblies(const Il2CppApi& api, const TargetSpec& spec);
+// Finds and validates a strict instance void set_text(string) method for the target spec.
+bool FindMethodInAssemblies(
+        const Il2CppApi& api,
+        const TargetSpec& spec,
+        ResolvedMethod& out,
+        std::string* reason = nullptr);
 
 }  // namespace il2cpputils
 

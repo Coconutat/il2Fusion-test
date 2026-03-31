@@ -301,6 +301,38 @@ uintptr_t FindExportInElf(const char* path, const char* symbol, uintptr_t base) 
     return 0;
 }
 
+bool IsExecutableAddressInModule(uintptr_t address, const char* module_name) {
+    if (address == 0 || module_name == nullptr || *module_name == '\0') {
+        return false;
+    }
+
+    FILE* fp = fopen("/proc/self/maps", "r");
+    if (!fp) {
+        return false;
+    }
+
+    char line[1024];
+    while (fgets(line, sizeof(line), fp)) {
+        uintptr_t start = 0;
+        uintptr_t end = 0;
+        char perms[5] = {};
+        if (sscanf(line, "%" SCNxPTR "-%" SCNxPTR " %4s", &start, &end, perms) != 3) {
+            continue;
+        }
+        if (address < start || address >= end) {
+            continue;
+        }
+        if (strstr(line, module_name) == nullptr) {
+            continue;
+        }
+        fclose(fp);
+        return perms[2] == 'x';
+    }
+
+    fclose(fp);
+    return false;
+}
+
 void* GetSecondArg(DobbyRegisterContext* ctx) {
 #if defined(__aarch64__)
     return reinterpret_cast<void*>(ctx->general.regs.x1);
@@ -332,6 +364,88 @@ void SetSecondArg(DobbyRegisterContext* ctx, void* value) {
 }  // namespace hookutils
 
 namespace il2cpputils {
+
+namespace {
+
+constexpr const char* kSetterNameLower = "set_text";
+constexpr const char* kSetterNameUpper = "set_Text";
+
+bool IsKnownSetterName(const std::string& name) {
+    return name == kSetterNameLower || name == kSetterNameUpper;
+}
+
+const char* TypeTagToString(int type) {
+    switch (type) {
+        case IL2CPP_TYPE_VOID:
+            return "void";
+        case IL2CPP_TYPE_STRING:
+            return "string";
+        case IL2CPP_TYPE_CLASS:
+            return "class";
+        case IL2CPP_TYPE_OBJECT:
+            return "object";
+        default:
+            return "other";
+    }
+}
+
+bool ValidateSetterMethod(
+        const Il2CppApi& api,
+        const TargetSpec& spec,
+        const MethodInfo* method,
+        ResolvedMethod& out,
+        std::string& reason) {
+    if (method == nullptr) {
+        reason = "method is null";
+        return false;
+    }
+    if (method->methodPointer == nullptr) {
+        reason = "methodPointer is null";
+        return false;
+    }
+    if (!api.method_get_name || !api.method_get_param_count || !api.method_get_param ||
+        !api.method_get_return_type || !api.method_is_instance) {
+        reason = "missing il2cpp metadata api";
+        return false;
+    }
+
+    const char* raw_name = api.method_get_name(method);
+    const std::string method_name = raw_name != nullptr ? raw_name : "";
+    if (method_name != spec.method || !IsKnownSetterName(method_name)) {
+        reason = "method name mismatch";
+        return false;
+    }
+
+    out.method = method;
+    out.entry = reinterpret_cast<uintptr_t>(method->methodPointer);
+    out.is_instance = api.method_is_instance(method);
+    out.param_count = api.method_get_param_count(method);
+
+    const Il2CppType* first_param = out.param_count > 0 ? api.method_get_param(method, 0) : nullptr;
+    const Il2CppType* return_type = api.method_get_return_type(method);
+    out.first_param_type = first_param != nullptr ? static_cast<int>(first_param->type) : -1;
+    out.return_type = return_type != nullptr ? static_cast<int>(return_type->type) : -1;
+
+    if (!out.is_instance) {
+        reason = "setter is static";
+        return false;
+    }
+    if (out.param_count != 1) {
+        reason = "setter param_count=" + std::to_string(out.param_count);
+        return false;
+    }
+    if (out.first_param_type != IL2CPP_TYPE_STRING) {
+        reason = std::string("setter first_param=") + TypeTagToString(out.first_param_type);
+        return false;
+    }
+    if (out.return_type != IL2CPP_TYPE_VOID) {
+        reason = std::string("setter return_type=") + TypeTagToString(out.return_type);
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
 
 bool ParseTarget(const std::string& full, TargetSpec& out) {
     const auto start = full.find_first_not_of(" \t\r\n");
@@ -383,6 +497,10 @@ bool ResolveIl2cppApi(void* handle, Il2CppApi& api) {
     ok &= resolve(api.class_get_methods, "il2cpp_class_get_methods");
     ok &= resolve(api.class_get_method_from_name, "il2cpp_class_get_method_from_name");
     ok &= resolve(api.method_get_name, "il2cpp_method_get_name");
+    ok &= resolve(api.method_get_param_count, "il2cpp_method_get_param_count");
+    ok &= resolve(api.method_get_param, "il2cpp_method_get_param");
+    ok &= resolve(api.method_get_return_type, "il2cpp_method_get_return_type");
+    ok &= resolve(api.method_is_instance, "il2cpp_method_is_instance");
     resolve(api.thread_attach, "il2cpp_thread_attach");
     resolve(api.is_vm_thread, "il2cpp_is_vm_thread");
 
@@ -413,17 +531,28 @@ bool EnsureVmReadyAndAttach(const Il2CppApi& api, int max_retry, std::chrono::mi
     return true;
 }
 
-const MethodInfo* FindMethodInAssemblies(const Il2CppApi& api, const TargetSpec& spec) {
-    if (!api.domain_get || !api.domain_get_assemblies || !api.assembly_get_image || !api.class_from_name) {
+bool FindMethodInAssemblies(
+        const Il2CppApi& api,
+        const TargetSpec& spec,
+        ResolvedMethod& out,
+        std::string* reason) {
+    if (!api.domain_get || !api.domain_get_assemblies || !api.assembly_get_image ||
+        !api.class_from_name || !api.class_get_methods || !api.method_get_name) {
         LOGE("Il2Cpp API 未准备好，跳过解析 %s", spec.full.c_str());
-        return nullptr;
+        if (reason) *reason = "il2cpp api not ready";
+        return false;
     }
 
     Il2CppDomain* domain = api.domain_get();
     if (domain == nullptr) {
-        return nullptr;
+        if (reason) *reason = "domain is null";
+        return false;
     }
 
+    bool class_found = false;
+    bool named_method_found = false;
+    ResolvedMethod resolved{};
+    bool has_valid_match = false;
     size_t count = 0;
     const Il2CppAssembly** assemblies = api.domain_get_assemblies(domain, &count);
     for (size_t i = 0; i < count; ++i) {
@@ -435,28 +564,52 @@ const MethodInfo* FindMethodInAssemblies(const Il2CppApi& api, const TargetSpec&
         if (klass == nullptr) {
             continue;
         }
+        class_found = true;
 
-        const MethodInfo* method = nullptr;
-        if (api.class_get_method_from_name) {
-            method = api.class_get_method_from_name(klass, spec.method.c_str(), 1);
-            if (method == nullptr) {
-                method = api.class_get_method_from_name(klass, spec.method.c_str(), 0);
+        void* iter = nullptr;
+        while (const MethodInfo* method = api.class_get_methods(klass, &iter)) {
+            const char* raw_name = api.method_get_name(method);
+            if (raw_name == nullptr || spec.method != raw_name) {
+                continue;
             }
-        }
-        if (method == nullptr && api.class_get_methods && api.method_get_name) {
-            void* iter = nullptr;
-            while ((method = api.class_get_methods(klass, &iter)) != nullptr) {
-                const char* name = api.method_get_name(method);
-                if (name != nullptr && spec.method == name) {
-                    break;
-                }
+            named_method_found = true;
+
+            ResolvedMethod candidate{};
+            std::string candidate_reason;
+            if (!ValidateSetterMethod(api, spec, method, candidate, candidate_reason)) {
+                LOGE("跳过方法 %s：%s", spec.full.c_str(), candidate_reason.c_str());
+                continue;
             }
-        }
-        if (method != nullptr && method->methodPointer != nullptr) {
-            return method;
+
+            if (!has_valid_match) {
+                resolved = candidate;
+                has_valid_match = true;
+                continue;
+            }
+
+            if (candidate.entry != resolved.entry) {
+                LOGE("目标 %s 解析到多个不同入口，拒绝安装 hook", spec.full.c_str());
+                if (reason) *reason = "ambiguous method pointers";
+                return false;
+            }
         }
     }
-    return nullptr;
+
+    if (!has_valid_match) {
+        if (reason) {
+            if (!class_found) {
+                *reason = "class not found";
+            } else if (!named_method_found) {
+                *reason = "setter name not found";
+            } else {
+                *reason = "setter signature rejected";
+            }
+        }
+        return false;
+    }
+
+    out = resolved;
+    return true;
 }
 
 }  // namespace il2cpputils

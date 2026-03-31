@@ -1,12 +1,14 @@
 #include "textExtractor.h"
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <cinttypes>
 #include <cstdlib>
 #include <dlfcn.h>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <type_traits>
 #include <thread>
 #include <unordered_map>
@@ -24,23 +26,26 @@ namespace text_extractor {
 namespace {
 
 constexpr const char* kLibIl2cpp = "libil2cpp.so";
+constexpr size_t kMaxHookSlots = 128;
+
+using SetterFn = void (*)(void*, textutils::Il2CppString*);
 
 struct HookedMethod {
     std::string full;
-};
-
-struct HookRegistry {
-    std::unordered_map<void*, HookedMethod> targets;  // method entry -> meta
+    uintptr_t entry = 0;
+    SetterFn original = nullptr;
+    bool active = false;
 };
 
 std::mutex g_hook_mutex;
 std::vector<il2cpputils::TargetSpec> g_targets;
 std::vector<void*> g_installed_targets;
-std::atomic<HookRegistry*> g_registry{nullptr};
+std::array<HookedMethod, kMaxHookSlots> g_hook_slots{};
 std::string g_process_name = "unknown";
 std::atomic_bool g_worker_started{false};
 std::atomic_bool g_il2cpp_ready{false};
 std::atomic_bool g_api_initialized{false};
+std::atomic_bool g_dobby_mode_configured{false};
 il2cpputils::Il2CppApi g_api{};
 
 bool EnsureIl2cppApi() {
@@ -88,41 +93,79 @@ bool EnsureIl2cppApi() {
     return true;
 }
 
-const MethodInfo* ResolveMethod(const il2cpputils::TargetSpec& spec) {
+bool ResolveMethod(const il2cpputils::TargetSpec& spec, il2cpputils::ResolvedMethod& out) {
     if (!EnsureIl2cppApi()) {
-        return nullptr;
+        return false;
     }
 
     if (!il2cpputils::EnsureVmReadyAndAttach(g_api, 50, std::chrono::milliseconds(100))) {
-        return nullptr;
+        return false;
     }
 
-    return il2cpputils::FindMethodInAssemblies(g_api, spec);
+    std::string reason;
+    if (!il2cpputils::FindMethodInAssemblies(g_api, spec, out, &reason)) {
+        LOGE("解析方法失败：%s (%s)", spec.full.c_str(), reason.c_str());
+        return false;
+    }
+    return true;
 }
 
-void setter_pre_handler(void* address, DobbyRegisterContext* ctx) {
-    HookRegistry* registry = g_registry.load();
-    const char* target_name = "<unknown>";
-    if (registry) {
-        auto it = registry->targets.find(address);
-        if (it != registry->targets.end()) {
-            target_name = it->second.full.c_str();
-        }
+void ProcessCapturedText(const HookedMethod& method, textutils::Il2CppString* value) {
+    if (value == nullptr) {
+        return;
     }
 
-    void* arg = hookutils::GetSecondArg(ctx);
-    const auto original = textutils::DescribeIl2CppString(
-            reinterpret_cast<textutils::Il2CppString*>(arg));
+    const auto original = textutils::DescribeIl2CppString(value);
+    if (original == "<null>" || original.rfind("<length=", 0) == 0 || original.empty()) {
+        return;
+    }
 
-    if (!original.empty()) {
-        const bool filtered = textutils::ShouldFilter(original);
-        if (filtered) {
-            LOGI("[Setter] %s 过滤：#%s#", target_name, original.c_str());
-        } else {
-            LOGI("[Setter] %s %s", target_name, original.c_str());
-            textdb::InsertIfNeeded(original);
+    const bool filtered = textutils::ShouldFilter(original);
+    if (filtered) {
+        LOGI("[Setter] %s 过滤：#%s#", method.full.c_str(), original.c_str());
+        return;
+    }
+
+    LOGI("[Setter] %s %s", method.full.c_str(), original.c_str());
+    textdb::InsertIfNeeded(original);
+}
+
+template <size_t Slot>
+void SetterReplacement(void* instance, textutils::Il2CppString* value) {
+    HookedMethod& method = g_hook_slots[Slot];
+    if (method.active) {
+        ProcessCapturedText(method, value);
+    }
+
+    SetterFn original = method.original;
+    if (original != nullptr) {
+        original(instance, value);
+    }
+}
+
+template <size_t... Slots>
+constexpr std::array<SetterFn, sizeof...(Slots)> MakeSetterReplacements(std::index_sequence<Slots...>) {
+    return { &SetterReplacement<Slots>... };
+}
+
+const auto kSetterReplacements = MakeSetterReplacements(std::make_index_sequence<kMaxHookSlots>{});
+
+void ResetHookSlotsLocked() {
+    for (auto& slot : g_hook_slots) {
+        slot.active = false;
+        slot.original = nullptr;
+        slot.entry = 0;
+        slot.full.clear();
+    }
+}
+
+int FindFreeHookSlotLocked() {
+    for (size_t i = 0; i < g_hook_slots.size(); ++i) {
+        if (!g_hook_slots[i].active && g_hook_slots[i].original == nullptr) {
+            return static_cast<int>(i);
         }
     }
+    return -1;
 }
 
 void clear_hooks_locked() {
@@ -133,9 +176,7 @@ void clear_hooks_locked() {
         }
     }
     g_installed_targets.clear();
-
-    HookRegistry* old = g_registry.exchange(nullptr);
-    delete old;
+    ResetHookSlotsLocked();
 }
 
 void install_hooks_locked() {
@@ -159,27 +200,74 @@ void install_hooks_locked() {
     }
 
     clear_hooks_locked();
-    HookRegistry* registry = new HookRegistry();
+    std::unordered_map<uintptr_t, std::string> seen_entries;
+    size_t success_count = 0;
+    size_t skipped_count = 0;
 
-    for (const auto& spec : g_targets) {
-        const MethodInfo* method = ResolveMethod(spec);
-        if (method == nullptr || method->methodPointer == nullptr) {
-            LOGE("解析方法失败：%s", spec.full.c_str());
-            continue;
-        }
-        void* target = reinterpret_cast<void*>(method->methodPointer);
-        const int ret = DobbyInstrument(target, setter_pre_handler);
-        if (ret == 0) {
-            g_installed_targets.push_back(target);
-            registry->targets[target] = HookedMethod{spec.full};
-            LOGI("Hook 成功: %s @ %p", spec.full.c_str(), target);
-        } else {
-            LOGE("Hook 失败 %s, ret=%d", spec.full.c_str(), ret);
-        }
+    if (!g_dobby_mode_configured.exchange(true)) {
+        dobby_enable_near_branch_trampoline();
     }
 
-    HookRegistry* old = g_registry.exchange(registry);
-    delete old;
+    for (const auto& spec : g_targets) {
+        il2cpputils::ResolvedMethod resolved{};
+        if (!ResolveMethod(spec, resolved)) {
+            ++skipped_count;
+            continue;
+        }
+
+        if (!hookutils::IsExecutableAddressInModule(resolved.entry, kLibIl2cpp)) {
+            LOGE("跳过 hook：%s -> 0x%" PRIxPTR " 不在 %s 可执行段内",
+                 spec.full.c_str(), resolved.entry, kLibIl2cpp);
+            ++skipped_count;
+            continue;
+        }
+
+        auto existing = seen_entries.find(resolved.entry);
+        if (existing != seen_entries.end()) {
+            LOGI("跳过重复入口：%s 与 %s 共用 0x%" PRIxPTR,
+                 spec.full.c_str(), existing->second.c_str(), resolved.entry);
+            ++skipped_count;
+            continue;
+        }
+
+        const int slot = FindFreeHookSlotLocked();
+        if (slot < 0 || static_cast<size_t>(slot) >= kSetterReplacements.size()) {
+            LOGE("跳过 hook：%s 没有可用 hook 槽位（上限=%zu）", spec.full.c_str(), kMaxHookSlots);
+            ++skipped_count;
+            continue;
+        }
+
+        void* target = reinterpret_cast<void*>(resolved.entry);
+        HookedMethod& hook_slot = g_hook_slots[static_cast<size_t>(slot)];
+        hook_slot.full = spec.full;
+        hook_slot.entry = resolved.entry;
+        hook_slot.original = nullptr;
+        hook_slot.active = false;
+
+        const int ret = DobbyHook(
+                target,
+                reinterpret_cast<dobby_dummy_func_t>(kSetterReplacements[static_cast<size_t>(slot)]),
+                reinterpret_cast<dobby_dummy_func_t*>(&hook_slot.original));
+        if (ret == 0) {
+            g_installed_targets.push_back(target);
+            hook_slot.active = true;
+            seen_entries.emplace(resolved.entry, spec.full);
+            ++success_count;
+            LOGI("Hook 成功: %s @ %p (slot=%d, instance=%d, params=%u, argType=%d, retType=%d)",
+                 spec.full.c_str(),
+                 target,
+                 slot,
+                 resolved.is_instance ? 1 : 0,
+                 resolved.param_count,
+                 resolved.first_param_type,
+                 resolved.return_type);
+        } else {
+            LOGE("Hook 失败 %s, ret=%d", spec.full.c_str(), ret);
+            hook_slot = HookedMethod{};
+            ++skipped_count;
+        }
+    }
+    LOGI("文本 hook 安装完成：成功 %zu，跳过 %zu", success_count, skipped_count);
 }
 
 void update_targets_internal(const std::vector<std::string>& new_targets) {
