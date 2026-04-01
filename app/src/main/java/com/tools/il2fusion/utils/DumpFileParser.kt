@@ -56,6 +56,7 @@ class DumpFileParser {
     ) {
         val setTextPattern = Utils.setTextPattern
         val setTextStrictPattern = Utils.setTextStrictSignaturePattern
+        val setTextBlacklist = Utils.setTextBlacklistPattern
         val rvaPattern = Utils.rvaPattern
         val classPattern = Utils.classDeclPattern
         var currentNamespace = ""
@@ -80,6 +81,7 @@ class DumpFileParser {
             val parsed = RvaUtils.parseRva(raw) ?: continue
             val methodName = extractMethodName(next) ?: "set_Text"
             val functionName = buildFunctionName(currentNamespace, currentClass, methodName)
+            if (setTextBlacklist.containsMatchIn(functionName)) continue
             val address = RvaUtils.formatRva(parsed)
             if (output.any { it.address == address || it.functionName == functionName }) continue
             output.add(TargetEntry(functionName = functionName, address = address))
