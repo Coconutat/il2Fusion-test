@@ -16,6 +16,9 @@ object Utils {
         """^\s*public\b.*?\bVoid\s+(set_text|set_Text)\s*\(\s*(?<!\.)String\s+\w+\s*\)\s*\{?""",
         setOf(RegexOption.MULTILINE)
     )
+    // Blacklist: reject set_text targets whose fully-qualified name contains "input" (e.g. InputField,
+    // TextInput). Mirrors IsSafeHookTarget / IsInputSetterTarget in textHook.cpp.
+    val setTextBlacklistPattern: Regex = Regex("""input""", RegexOption.IGNORE_CASE)
 
     fun resolveDisplayName(context: Context, uri: Uri): String? {
         return try {
