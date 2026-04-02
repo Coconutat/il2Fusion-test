@@ -1,6 +1,7 @@
 package com.tools.il2fusion.feature.common
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
@@ -14,6 +15,7 @@ import com.tools.il2fusion.R
 import com.tools.il2fusion.core.design.SectionCard
 import com.tools.il2fusion.core.design.StatusBadge
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HookSummaryCard(
     summary: HookSummaryUiModel,
