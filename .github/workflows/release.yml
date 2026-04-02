@@ -69,6 +69,9 @@ jobs:
           ASSET_PATH="$RUNNER_TEMP/$ASSET_NAME"
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
             gh release upload "$TAG_NAME" "$ASSET_PATH" --clobber
+            gh release edit "$TAG_NAME" \
+              --draft=false \
+              --title "$RELEASE_NAME"
           else
             gh release create "$TAG_NAME" "$ASSET_PATH" \
               --title "$RELEASE_NAME" \
