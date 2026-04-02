@@ -71,6 +71,9 @@
     <string name="settings_update_install_started">已启动系统安装器。</string>
     <string name="settings_update_install_failed">系统安装器启动失败。</string>
     <string name="settings_update_permission_required">请先允许“安装未知应用”，然后再次点击按钮。</string>
+    <string name="settings_update_invalid_apk">下载的文件不是有效的更新 APK。</string>
+    <string name="settings_update_package_mismatch">下载的 APK 与当前应用包名不一致。</string>
+    <string name="settings_update_signature_mismatch">下载的 APK 与当前已安装应用的签名不一致，Android 已阻止覆盖安装。如果当前设备安装的是本地或调试版本，请先卸载一次，再安装正式版。</string>
     <string name="settings_update_rate_limited">GitHub API 触发速率限制，请稍后再试。</string>
     <string name="settings_update_failed_generic">检查更新失败。</string>
     <string name="settings_update_release_time">发布时间：%1$s</string>

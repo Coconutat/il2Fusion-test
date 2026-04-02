@@ -71,6 +71,9 @@
     <string name="settings_update_install_started">Android installer launched.</string>
     <string name="settings_update_install_failed">Failed to launch the Android installer.</string>
     <string name="settings_update_permission_required">Allow installs from this source, then tap the button again.</string>
+    <string name="settings_update_invalid_apk">The downloaded file is not a valid update APK.</string>
+    <string name="settings_update_package_mismatch">The downloaded APK does not match this app package.</string>
+    <string name="settings_update_signature_mismatch">The downloaded APK uses a different signing key than the installed app. If this device has a local or debug build, uninstall it once and install the release APK fresh.</string>
     <string name="settings_update_rate_limited">GitHub API rate limit reached. Please try again later.</string>
     <string name="settings_update_failed_generic">Failed to check for updates.</string>
     <string name="settings_update_release_time">Published: %1$s</string>

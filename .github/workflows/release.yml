@@ -51,36 +51,13 @@ jobs:
       - name: Build release APK
         run: ./gradlew :app:assembleRelease
 
-      - name: Sign APK for GitHub Release
+      - name: Prepare GitHub Release Asset
         env:
           ASSET_NAME: ${{ steps.version.outputs.asset_name }}
         run: |
-          UNSIGNED_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
-          ALIGNED_APK="$RUNNER_TEMP/app-release-aligned.apk"
+          SOURCE_APK="app/build/outputs/apk/release/app-release.apk"
           SIGNED_APK="$RUNNER_TEMP/$ASSET_NAME"
-          KEYSTORE_PATH="$RUNNER_TEMP/il2fusion-ci.keystore"
-          ZIPALIGN="$(find "$ANDROID_HOME/build-tools" -name zipalign | sort | tail -n 1)"
-          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort | tail -n 1)"
-
-          keytool -genkeypair \
-            -keystore "$KEYSTORE_PATH" \
-            -storepass android \
-            -keypass android \
-            -alias il2fusion-ci \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=il2Fusion CI,O=il2Fusion,C=US"
-
-          "$ZIPALIGN" -f -p 4 "$UNSIGNED_APK" "$ALIGNED_APK"
-          "$APKSIGNER" sign \
-            --ks "$KEYSTORE_PATH" \
-            --ks-key-alias il2fusion-ci \
-            --ks-pass pass:android \
-            --key-pass pass:android \
-            --out "$SIGNED_APK" \
-            "$ALIGNED_APK"
-          "$APKSIGNER" verify "$SIGNED_APK"
+          cp "$SOURCE_APK" "$SIGNED_APK"
 
       - name: Publish GitHub Release
         env:

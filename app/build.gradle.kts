@@ -4,8 +4,13 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+import java.util.Properties
+
 val il2fusionVersionCode = providers.gradleProperty("IL2FUSION_VERSION_CODE").get().toInt()
 val il2fusionVersionName = providers.gradleProperty("IL2FUSION_VERSION_NAME").get()
+val signingProperties = Properties().apply {
+    file("signing/signing.properties").inputStream().use(::load)
+}
 
 android {
     namespace = "com.tools.il2fusion"
@@ -24,8 +29,21 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("projectFixed") {
+            storeFile = file(signingProperties.getProperty("storeFile"))
+            storePassword = signingProperties.getProperty("storePassword")
+            keyAlias = signingProperties.getProperty("keyAlias")
+            keyPassword = signingProperties.getProperty("keyPassword")
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("projectFixed")
+        }
         release {
+            signingConfig = signingConfigs.getByName("projectFixed")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
