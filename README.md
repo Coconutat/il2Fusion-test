@@ -5,7 +5,7 @@ il2Fusion
   <img src="doc/imgs/il2FusionIcon.png" alt="il2Fusion icon" width="233" />
 </p>
 
-LSPosed（Java 层 hook）+ And64InlineHook / Dobby（Native 层 hook）+ ContentProvider 跨进程通信的 Il2Cpp 工具链项目。当前版本：`0.0.1`。
+LSPosed（Java 层 hook）+ And64InlineHook / Dobby（Native 层 hook）+ ContentProvider 跨进程通信的 Il2Cpp 工具链项目。
 
 English version: see [README_EN](doc/README_EN.md).
 
