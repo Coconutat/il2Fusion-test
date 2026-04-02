@@ -5,7 +5,7 @@ il2Fusion
   <img src="imgs/il2FusionIcon.png" alt="il2Fusion icon" width="180" />
 </p>
 
-LSPosed (Java-layer hook) + And64InlineHook / Dobby (native hook) + ContentProvider IPC, built around Il2Cpp dumping and Unity-oriented tooling. Current version: `0.0.1`.
+LSPosed (Java-layer hook) + And64InlineHook / Dobby (native hook) + ContentProvider IPC, built around Il2Cpp dumping and Unity-oriented tooling. 
 
 <p align="center">
   <img src="imgs/Screenshot_01.png" alt="il2Fusion screenshot 1" width="260" />
