@@ -32,6 +32,13 @@ std::string DescribeIl2CppString(const Il2CppString* str);
 }
 
 namespace hookutils {
+struct ModuleInfo {
+    uintptr_t load_bias = 0;
+    std::string path;
+};
+
+bool GetModuleInfo(const char* name, ModuleInfo* out);
+bool WaitForModuleInfo(const char* name, std::chrono::milliseconds timeout, ModuleInfo* out);
 uintptr_t FindModuleBase(const char* name);
 uintptr_t WaitForModule(const char* name, std::chrono::milliseconds timeout);
 std::string FindModulePath(const char* name);

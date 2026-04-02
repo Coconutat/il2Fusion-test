@@ -56,27 +56,20 @@ bool EnsureIl2cppApi() {
         return true;
     }
 
+    hookutils::ModuleInfo module_info;
+    const bool has_module_info = hookutils::GetModuleInfo(kLibIl2cpp, &module_info);
     void* handle = dlopen(kLibIl2cpp, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
     if (handle == nullptr) {
-        const char* path = find_full_path("libil2cpp");
-        if (path != nullptr) {
-            handle = dlopen(path, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
-            free(const_cast<char*>(path));
-        }
-    }
-    if (handle == nullptr) {
-        const std::string mapped = hookutils::FindModulePath(kLibIl2cpp);
-        if (!mapped.empty()) {
-            handle = dlopen(mapped.c_str(), RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
+        if (has_module_info && !module_info.path.empty()) {
+            handle = dlopen(module_info.path.c_str(), RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
         }
     }
     if (handle == nullptr) {
         handle = xdl_open(kLibIl2cpp, 0);
     }
     if (handle == nullptr) {
-        const std::string mapped = hookutils::FindModulePath(kLibIl2cpp);
-        if (!mapped.empty()) {
-            handle = xdl_open(mapped.c_str(), 0);
+        if (has_module_info && !module_info.path.empty()) {
+            handle = xdl_open(module_info.path.c_str(), 0);
         }
     }
     if (handle == nullptr) {
@@ -96,17 +89,28 @@ bool EnsureIl2cppApi() {
     return true;
 }
 
-bool ResolveMethod(const il2cpputils::TargetSpec& spec, il2cpputils::ResolvedMethod& out) {
+bool ResolveMethod(const il2cpputils::TargetSpec& spec,
+                   il2cpputils::ResolvedMethod& out,
+                   std::string* out_reason = nullptr) {
     if (!EnsureIl2cppApi()) {
+        if (out_reason != nullptr) {
+            *out_reason = "il2cpp api unavailable";
+        }
         return false;
     }
 
     if (!il2cpputils::EnsureVmReadyAndAttach(g_api, 50, std::chrono::milliseconds(100))) {
+        if (out_reason != nullptr) {
+            *out_reason = "vm not ready";
+        }
         return false;
     }
 
     std::string reason;
     if (!il2cpputils::FindMethodInAssemblies(g_api, spec, out, &reason)) {
+        if (out_reason != nullptr) {
+            *out_reason = reason;
+        }
         LOGE("解析方法失败：%s (%s)", spec.full.c_str(), reason.c_str());
         return false;
     }
@@ -266,6 +270,59 @@ bool TryResolveMethodFromJson(const il2cpputils::TargetSpec& spec, uintptr_t* ou
     return true;
 }
 
+bool ResolveMethodForInstall(const il2cpputils::TargetSpec& spec,
+                             uintptr_t* out_entry,
+                             bool* out_verified_json,
+                             il2cpputils::ResolvedMethod* out_reflection) {
+    if (out_entry == nullptr) {
+        return false;
+    }
+
+    uintptr_t json_entry = 0;
+    const bool has_json = TryResolveMethodFromJson(spec, &json_entry);
+
+    il2cpputils::ResolvedMethod reflection{};
+    std::string reflection_reason;
+    const bool has_reflection = ResolveMethod(spec, reflection, &reflection_reason);
+    if (out_reflection != nullptr && has_reflection) {
+        *out_reflection = reflection;
+    }
+
+    if (out_verified_json != nullptr) {
+        *out_verified_json = false;
+    }
+
+    if (has_json && has_reflection) {
+        if (json_entry == reflection.entry) {
+            *out_entry = json_entry;
+            if (out_verified_json != nullptr) {
+                *out_verified_json = true;
+            }
+            return true;
+        }
+
+        LOGW("JSON 目标与运行时反射不一致：%s json=0x%" PRIxPTR " reflection=0x%" PRIxPTR "，回退到反射入口",
+             spec.full.c_str(),
+             json_entry,
+             reflection.entry);
+        *out_entry = reflection.entry;
+        return true;
+    }
+
+    if (has_reflection) {
+        *out_entry = reflection.entry;
+        return true;
+    }
+
+    if (has_json) {
+        LOGW("拒绝仅凭 JSON 安装 hook：%s json=0x%" PRIxPTR "，运行时反射校验失败（%s）",
+             spec.full.c_str(),
+             json_entry,
+             reflection_reason.empty() ? "unknown" : reflection_reason.c_str());
+    }
+    return false;
+}
+
 void install_hooks_locked() {
 #if !defined(__arm__) && !defined(__aarch64__) && !defined(__x86_64__) && !defined(__i386__)
     LOGE("当前架构不支持文本拦截");
@@ -306,14 +363,11 @@ void install_hooks_locked() {
 
     for (const auto& spec : g_targets) {
         uintptr_t resolved_entry = 0;
-        bool resolved_from_json = TryResolveMethodFromJson(spec, &resolved_entry);
         il2cpputils::ResolvedMethod resolved{};
-        if (!resolved_from_json) {
-            if (!ResolveMethod(spec, resolved)) {
-                ++skipped_count;
-                continue;
-            }
-            resolved_entry = resolved.entry;
+        bool resolved_from_verified_json = false;
+        if (!ResolveMethodForInstall(spec, &resolved_entry, &resolved_from_verified_json, &resolved)) {
+            ++skipped_count;
+            continue;
         }
 
         if (!hookutils::IsExecutableAddressInModule(resolved_entry, kLibIl2cpp)) {
@@ -356,7 +410,7 @@ void install_hooks_locked() {
             hook_slot.active = true;
             seen_entries.emplace(resolved_entry, spec.full);
             ++success_count;
-            if (resolved_from_json) {
+            if (resolved_from_verified_json) {
                 LOGI("Hook 成功: %s @ %p (slot=%d, source=json_rva, backend=%s)",
                      spec.full.c_str(),
                      target,

@@ -7,6 +7,8 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <elf.h>
+#include <limits>
+#include <string>
 #include <thread>
 #include <unistd.h>
 #include <thread>
@@ -116,66 +118,173 @@ std::string DescribeIl2CppString(const Il2CppString* str) {
 }  // namespace textutils
 
 namespace hookutils {
+namespace {
 
-uintptr_t FindModuleBase(const char* name) {
-    FILE* fp = fopen("/proc/self/maps", "r");
-    if (!fp) {
-        return 0;
+const char* BasenameFromPath(const char* path) {
+    if (path == nullptr) {
+        return nullptr;
+    }
+    const char* slash = std::strrchr(path, '/');
+    return slash != nullptr ? slash + 1 : path;
+}
+
+std::string ExtractLinePath(char* line) {
+    if (line == nullptr) {
+        return {};
+    }
+    char* path = std::strchr(line, '/');
+    if (path == nullptr) {
+        return {};
+    }
+    const size_t len = std::strlen(path);
+    if (len > 0 && path[len - 1] == '\n') {
+        path[len - 1] = '\0';
+    }
+    return std::string(path);
+}
+
+bool ModulePathMatches(const char* module_name, const std::string& path) {
+    if (module_name == nullptr || *module_name == '\0' || path.empty()) {
+        return false;
+    }
+    if (std::strchr(module_name, '/') != nullptr) {
+        return path == module_name;
+    }
+    const char* basename = BasenameFromPath(path.c_str());
+    return basename != nullptr && std::strcmp(basename, module_name) == 0;
+}
+
+bool TryGetModuleInfoFromXdl(const char* name, ModuleInfo* out) {
+    if (name == nullptr || out == nullptr || *name == '\0') {
+        return false;
     }
 
-    char line[512];
-    while (fgets(line, sizeof(line), fp)) {
-        if (strstr(line, name) == nullptr) {
+    void* handle = xdl_open(name, 0);
+    if (handle == nullptr) {
+        return false;
+    }
+
+    xdl_info_t info{};
+    const int ret = xdl_info(handle, XDL_DI_DLINFO, &info);
+    if (ret != 0 || info.dli_fbase == nullptr || info.dli_fname == nullptr || *info.dli_fname == '\0') {
+        xdl_close(handle);
+        return false;
+    }
+
+    out->load_bias = reinterpret_cast<uintptr_t>(info.dli_fbase);
+    out->path = info.dli_fname;
+    xdl_close(handle);
+    return out->load_bias != 0 && !out->path.empty();
+}
+
+bool TryGetModuleInfoFromMaps(const char* name, ModuleInfo* out) {
+    if (name == nullptr || out == nullptr || *name == '\0') {
+        return false;
+    }
+
+    FILE* fp = std::fopen("/proc/self/maps", "r");
+    if (fp == nullptr) {
+        return false;
+    }
+
+    bool found = false;
+    uintptr_t best_load_bias = 0;
+    int best_score = -1;
+    std::string best_path;
+
+    char line[1024];
+    while (std::fgets(line, sizeof(line), fp)) {
+        uintptr_t start = 0;
+        uintptr_t end = 0;
+        uintptr_t offset = 0;
+        char perms[5] = {};
+        if (std::sscanf(line, "%" SCNxPTR "-%" SCNxPTR " %4s %" SCNxPTR,
+                        &start, &end, perms, &offset) != 4) {
             continue;
         }
 
-        uintptr_t start = 0;
-        if (sscanf(line, "%" SCNxPTR "-%*lx", &start) == 1) {
-            fclose(fp);
-            return start;
+        std::string path = ExtractLinePath(line);
+        if (!ModulePathMatches(name, path)) {
+            continue;
+        }
+        if (start < offset) {
+            continue;
+        }
+
+        const int score = (std::strchr(name, '/') != nullptr && path == name) ? 2 : 1;
+        const uintptr_t candidate_load_bias = start - offset;
+        if (!found || score > best_score ||
+            (score == best_score && candidate_load_bias < best_load_bias)) {
+            found = true;
+            best_score = score;
+            best_load_bias = candidate_load_bias;
+            best_path = std::move(path);
         }
     }
 
-    fclose(fp);
-    return 0;
+    std::fclose(fp);
+    if (!found || best_load_bias == 0 || best_path.empty()) {
+        return false;
+    }
+
+    out->load_bias = best_load_bias;
+    out->path = best_path;
+    return true;
 }
 
-uintptr_t WaitForModule(const char* name, std::chrono::milliseconds timeout) {
+}  // namespace
+
+bool GetModuleInfo(const char* name, ModuleInfo* out) {
+    if (out == nullptr) {
+        return false;
+    }
+    *out = ModuleInfo{};
+    if (TryGetModuleInfoFromXdl(name, out)) {
+        return true;
+    }
+    return TryGetModuleInfoFromMaps(name, out);
+}
+
+bool WaitForModuleInfo(const char* name, std::chrono::milliseconds timeout, ModuleInfo* out) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
+    ModuleInfo info;
     while (std::chrono::steady_clock::now() < deadline) {
-        const auto base = FindModuleBase(name);
-        if (base != 0) {
-            return base;
+        if (GetModuleInfo(name, &info)) {
+            if (out != nullptr) {
+                *out = info;
+            }
+            return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    return 0;
+    if (out != nullptr) {
+        *out = ModuleInfo{};
+    }
+    return false;
+}
+
+uintptr_t FindModuleBase(const char* name) {
+    ModuleInfo info;
+    if (!GetModuleInfo(name, &info)) {
+        return 0;
+    }
+    return info.load_bias;
+}
+
+uintptr_t WaitForModule(const char* name, std::chrono::milliseconds timeout) {
+    ModuleInfo info;
+    if (!WaitForModuleInfo(name, timeout, &info)) {
+        return 0;
+    }
+    return info.load_bias;
 }
 
 std::string FindModulePath(const char* name) {
-    FILE* fp = fopen("/proc/self/maps", "r");
-    if (!fp) {
+    ModuleInfo info;
+    if (!GetModuleInfo(name, &info)) {
         return {};
     }
-
-    char line[512];
-    while (fgets(line, sizeof(line), fp)) {
-        if (strstr(line, name) == nullptr) {
-            continue;
-        }
-        char* path = strchr(line, '/');
-        if (path != nullptr) {
-            const size_t len = strlen(path);
-            if (len > 0 && path[len - 1] == '\n') {
-                path[len - 1] = '\0';
-            }
-            fclose(fp);
-            return std::string(path);
-        }
-    }
-
-    fclose(fp);
-    return {};
+    return info.path;
 }
 
 uintptr_t FindExportInElf(const char* path, const char* symbol, uintptr_t base) {
@@ -322,7 +431,8 @@ bool IsExecutableAddressInModule(uintptr_t address, const char* module_name) {
         if (address < start || address >= end) {
             continue;
         }
-        if (strstr(line, module_name) == nullptr) {
+        std::string path = ExtractLinePath(line);
+        if (!ModulePathMatches(module_name, path)) {
             continue;
         }
         fclose(fp);
@@ -654,74 +764,25 @@ void* lookup_symbol(const char* libraryname, const char* symbolname) {
 }
 
 void* lookup_symbol2(const char* libraryname, const char* symbolname) {
-    FILE* fp;
-    char* pch;
-    void* path = malloc(1024);
-    char filename[32];
-    char line[1024];
-    const int pid = getpid();
-    void* handle = nullptr;
-
-    if (pid < 0) {
-        strcpy(filename, "/proc/self/maps");
-    } else {
-        snprintf(filename, sizeof(filename), "/proc/%d/maps", pid);
+    const char* path = find_full_path(libraryname);
+    if (path == nullptr) {
+        return nullptr;
     }
-    fp = fopen(filename, "r");
-    if (fp != nullptr) {
-        while (fgets(line, sizeof(line), fp)) {
-            if (strstr(line, libraryname)) {
-                pch = strtok(line, " ");
-                while (pch != nullptr && !strstr(pch, libraryname)) {
-                    pch = strtok(nullptr, " ");
-                }
-                memset(path, 0, 1024);
-                memcpy(path, pch, strlen(pch) - 1);
 
-                handle = lookup_symbol(static_cast<const char*>(path), symbolname);
-                if (handle != nullptr) {
-                    LOGI("lookup_symbol2 success: %s %s %p", static_cast<char*>(path), symbolname, handle);
-                    break;
-                }
-            }
-        }
-        fclose(fp);
+    void* handle = lookup_symbol(path, symbolname);
+    if (handle != nullptr) {
+        LOGI("lookup_symbol2 success: %s %s %p", path, symbolname, handle);
     }
-    free(path);
+    free(const_cast<char*>(path));
     return handle;
 }
 
 const char* find_full_path(const char* libraryname) {
-    FILE* fp;
-    char* pch;
-    void* path = malloc(1024);
-    memset(path, 0, 1024);
-    char filename[32];
-    char line[1024];
-    const int pid = getpid();
-
-    if (pid < 0) {
-        strcpy(filename, "/proc/self/maps");
-    } else {
-        snprintf(filename, sizeof(filename), "/proc/%d/maps", pid);
+    hookutils::ModuleInfo info;
+    if (!hookutils::GetModuleInfo(libraryname, &info) || info.path.empty()) {
+        return nullptr;
     }
-    fp = fopen(filename, "r");
-    if (fp != nullptr) {
-        while (fgets(line, sizeof(line), fp)) {
-            if (strstr(line, libraryname)) {
-                pch = strtok(line, " ");
-                while (pch != nullptr && !strstr(pch, libraryname)) {
-                    pch = strtok(nullptr, " ");
-                }
-                memcpy(path, pch, strlen(pch) - 1);
-                fclose(fp);
-                return static_cast<const char*>(path);
-            }
-        }
-        fclose(fp);
-    }
-    free(path);
-    return nullptr;
+    return strdup(info.path.c_str());
 }
 
 }  // extern "C"
