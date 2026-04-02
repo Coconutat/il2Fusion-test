@@ -1,0 +1,93 @@
+<resources>
+    <string name="app_name">il2Fusion</string>
+    <string name="app_subtitle">Unity 游戏逆向工程工具集</string>
+    <string name="module_desc">通过 LSPosed 实现 Unity 文本提取/替换辅助</string>
+
+    <string name="tab_overview">总览</string>
+    <string name="tab_mode">模式</string>
+    <string name="tab_parse">解析</string>
+    <string name="tab_settings">设置</string>
+
+    <string name="common_enabled">已开启</string>
+    <string name="common_disabled">已关闭</string>
+    <string name="common_later">稍后</string>
+
+    <string name="hook_framework_and64">And64InlineHook</string>
+    <string name="hook_framework_dobby">Dobby Hook</string>
+
+    <string name="language_english">英文</string>
+    <string name="language_simplified_chinese">简体中文</string>
+
+    <string name="overview_runtime_title">运行概览</string>
+    <string name="overview_runtime_dump_subtitle">当前已启用仅 Dump 模式。</string>
+    <string name="overview_runtime_hook_subtitle">当前已启用文本拦截模式。</string>
+    <string name="overview_runtime_dump_body">应用只会执行 Il2Cpp dump 流程，不会安装原生文本 hook。</string>
+    <string name="overview_runtime_hook_body">应用会优先使用 JSON/RVA 目标，元数据不足时再回退到反射方式定位方法。</string>
+    <string name="overview_runtime_footer">请通过底部标签在总览、模式、解析和设置页面之间切换。</string>
+    <string name="overview_flow_title">推荐流程</string>
+    <string name="overview_flow_subtitle">按业务步骤拆分配置过程。</string>
+    <string name="overview_flow_body">1. 先确认运行模式。2. 从 dump.cs 解析并保存目标方法。3. 需要时到设置页检查新版本。4. 在 LSPosed 中一次只勾选一个目标应用。</string>
+
+    <string name="summary_saved_methods">已保存 %1$d 个方法</string>
+    <string name="summary_mode_dump_only">仅 Dump</string>
+    <string name="summary_mode_intercept">拦截并记录</string>
+    <string name="summary_json_cached">JSON 已缓存</string>
+    <string name="summary_json_missing">JSON 未缓存</string>
+
+    <string name="usage_notes_title">使用提示</string>
+    <string name="usage_notes_body">当 LSPosed 同时勾选多个应用时，只有当前进程能稳定收到原生 hook。建议一次只启用一个目标包名。</string>
+
+    <string name="mode_dump_title">Il2CppDumper 模式</string>
+    <string name="mode_dump_enabled_desc">仅执行 dump 生成流程，不安装文本拦截。</string>
+    <string name="mode_dump_disabled_desc">关闭仅 Dump 模式，保持文本拦截能力。</string>
+    <string name="mode_framework_title">Hook 框架</string>
+    <string name="mode_framework_dobby_desc">当前启用 Dobby，适合需要运行期重新安装 hook 的场景。</string>
+    <string name="mode_framework_and64_desc">当前启用 And64InlineHook，仍是文本 hook 场景的默认框架。</string>
+
+    <string name="parse_import_title">导入 dump 文件</string>
+    <string name="parse_import_subtitle">选择已生成的 dump.cs 文件，自动提取全部 set_text 目标。</string>
+    <string name="parse_pick_file">选择文件并解析</string>
+    <string name="parse_results_title">解析结果</string>
+    <string name="parse_results_subtitle">当前已保存：%1$d</string>
+    <string name="parse_results_empty">暂无方法，请先解析 dump.cs 文件。</string>
+    <string name="parse_save">保存到本地</string>
+
+    <string name="settings_language_title">应用语言</string>
+    <string name="settings_language_subtitle">可自动跟随系统语言，也可强制指定应用内语言。</string>
+    <string name="settings_language_auto">跟随系统</string>
+    <string name="settings_language_manual">指定语言</string>
+    <string name="settings_language_effective">当前生效语言：%1$s</string>
+    <string name="settings_language_switched">语言设置已更新。</string>
+
+    <string name="settings_about_title">版本与更新</string>
+    <string name="settings_about_subtitle">查看当前安装版本，并手动触发更新检查。</string>
+    <string name="settings_version_value">版本 %1$s（%2$d）</string>
+    <string name="settings_check_update">检查更新</string>
+    <string name="settings_update_available_inline">检测到新版本：%1$s</string>
+    <string name="settings_update_latest">当前已经是最新版本。</string>
+    <string name="settings_update_no_apk">最新 GitHub Release 中未找到 APK 资源。</string>
+    <string name="settings_update_download_complete">更新包下载完成。</string>
+    <string name="settings_update_download_failed">更新包下载失败。</string>
+    <string name="settings_update_install_started">已启动系统安装器。</string>
+    <string name="settings_update_install_failed">系统安装器启动失败。</string>
+    <string name="settings_update_permission_required">请先允许“安装未知应用”，然后再次点击按钮。</string>
+    <string name="settings_update_rate_limited">GitHub API 触发速率限制，请稍后再试。</string>
+    <string name="settings_update_failed_generic">检查更新失败。</string>
+    <string name="settings_update_release_time">发布时间：%1$s</string>
+    <string name="settings_download_install">下载安装</string>
+
+    <string name="update_dialog_title">发现新版本</string>
+    <string name="update_dialog_message">检测到更新版本 %1$s。请前往设置页查看并安装。</string>
+    <string name="update_dialog_action">前往设置</string>
+
+    <string name="message_dump_mode_enabled">已切换到 Dump 模式。</string>
+    <string name="message_dump_mode_disabled">已切换到文本拦截模式。</string>
+    <string name="message_hook_framework_dobby">Hook 框架已切换为 Dobby。</string>
+    <string name="message_hook_framework_and64">Hook 框架已切换为 And64InlineHook。</string>
+    <string name="message_no_file_selected">未选择文件。</string>
+    <string name="message_parse_empty">所选文件中未找到有效的 set_text 方法。</string>
+    <string name="message_parse_success">已解析并保存 %1$d 个 set_text 方法。</string>
+    <string name="message_json_saved">JSON 已导出到 %1$s</string>
+    <string name="message_parse_save_empty">请先解析 dump.cs 再保存方法列表。</string>
+    <string name="message_save_success">已成功保存 %1$d 个方法。</string>
+</resources>

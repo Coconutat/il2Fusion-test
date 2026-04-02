@@ -7,16 +7,19 @@ import kotlinx.coroutines.withContext
 /**
  * Mediates data access between the UI and HookConfigStore to keep logic centralized.
  */
-class HookConfigRepository {
+class HookConfigRepository(
+    context: Context
+) {
+    private val appContext = context.applicationContext
 
     /**
      * Loads stored target method list and dump mode flag from the shared content provider.
      */
-    suspend fun loadConfig(context: Context): HookConfigPayload = withContext(Dispatchers.IO) {
-        val savedTargets = HookConfigStore.loadTargetsForApp(context)
-        val dumpMode = HookConfigStore.loadDumpModeForApp(context)
-        val hookFramework = HookConfigStore.loadHookFrameworkForApp(context)
-        val targetsJson = HookConfigStore.loadTargetsJsonForApp(context)
+    suspend fun loadConfig(): HookConfigPayload = withContext(Dispatchers.IO) {
+        val savedTargets = HookConfigStore.loadTargetsForApp(appContext)
+        val dumpMode = HookConfigStore.loadDumpModeForApp(appContext)
+        val hookFramework = HookConfigStore.loadHookFrameworkForApp(appContext)
+        val targetsJson = HookConfigStore.loadTargetsJsonForApp(appContext)
         HookConfigPayload(
             targets = savedTargets,
             dumpModeEnabled = dumpMode,
@@ -28,23 +31,27 @@ class HookConfigRepository {
     /**
      * Persists the dump mode flag through the content provider.
      */
-    suspend fun saveDumpMode(context: Context, enabled: Boolean) = withContext(Dispatchers.IO) {
-        HookConfigStore.saveDumpMode(context, enabled)
+    suspend fun saveDumpMode(enabled: Boolean) = withContext(Dispatchers.IO) {
+        HookConfigStore.saveDumpMode(appContext, enabled)
+        HookConfigChangeBus.notifyChanged()
     }
 
-    suspend fun saveHookFramework(context: Context, framework: HookFramework) = withContext(Dispatchers.IO) {
-        HookConfigStore.saveHookFramework(context, framework)
+    suspend fun saveHookFramework(framework: HookFramework) = withContext(Dispatchers.IO) {
+        HookConfigStore.saveHookFramework(appContext, framework)
+        HookConfigChangeBus.notifyChanged()
     }
 
     /**
      * Persists the target method list through the content provider.
      */
-    suspend fun saveTargets(context: Context, targets: List<String>) = withContext(Dispatchers.IO) {
-        HookConfigStore.saveTargets(context, targets)
+    suspend fun saveTargets(targets: List<String>) = withContext(Dispatchers.IO) {
+        HookConfigStore.saveTargets(appContext, targets)
+        HookConfigChangeBus.notifyChanged()
     }
 
-    suspend fun saveTargetsJson(context: Context, json: String) = withContext(Dispatchers.IO) {
-        HookConfigStore.saveTargetsJson(context, json)
+    suspend fun saveTargetsJson(json: String) = withContext(Dispatchers.IO) {
+        HookConfigStore.saveTargetsJson(appContext, json)
+        HookConfigChangeBus.notifyChanged()
     }
 }
 
