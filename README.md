@@ -5,49 +5,96 @@ il2Fusion
   <img src="doc/imgs/il2FusionIcon.png" alt="il2Fusion icon" width="233" />
 </p>
 
-LSPosed (Java-layer hook) + And64InlineHook / Dobby (native hook) + ContentProvider IPC, built around Il2Cpp dumping and Unity-oriented tooling.
+il2Fusion is an Android-side Unity game reverse engineering toolkit built around LSPosed, JNI, and native hook backends. It combines Il2Cpp dump generation, configurable text interception, cross-process configuration sync, and on-device tooling for reverse engineering workflows.
 
 Chinese version: see [README_ZH](doc/README_ZH.md).
 
-<p align="center">
-  <img src="doc/imgs/Screenshot_01.png" alt="il2Fusion screenshot 1" width="260" />
-  <img src="doc/imgs/Screenshot_02.png" alt="il2Fusion screenshot 2" width="260" />
-  <img src="doc/imgs/Screenshot_03.png" alt="il2Fusion screenshot 3" width="260" />
-</p>
+## Highlights
+- Dual native hook backends with runtime selection: `And64InlineHook` by default, `Dobby` as an alternative.
+- Dump-first workflow that generates `dump.cs` and exports it to `/sdcard/Download/<pkg>.cs`.
+- Unity text interception pipeline with JSON/RVA preference and reflection fallback.
+- Cross-process config sync from the app process to the LSPosed-injected target process.
 
-## Features
-- Dual native hook backends: adds `And64InlineHook` support while keeping `Dobby` as a switchable backend; `And64InlineHook` is now the default path.
-- Dump-first: one-tap Il2CppDumper to produce `dump.cs`, auto-copy to `/sdcard/Download/<pkg>.cs` with Toast feedback.
-- Unity text interception/replacement: install hooks in `libil2cpp.so`, prefer JSON/RVA-driven targets, fall back to reflection lookup when needed, and support both text logging and replacement flow.
-- Config sync: plugin app writes to `ContentProvider (com.tools.il2fusion.provider/config)`, injected process reads and forwards to native.
-- File parsing: parse `set_text` method names from `.cs` dump files and export JSON for import.
-- UI refactor: the Compose app now uses a redesigned tool-style interface with clearer mode switching, hook backend selection, and status presentation.
+## Architecture Overview
+
+```mermaid
+flowchart LR
+    A["Compose App Shell<br/>app/"] --> B["Feature ViewModels<br/>feature/*"]
+    B --> C["Shared Config Repository<br/>config/"]
+    B --> D["I18N Module<br/>core/i18n"]
+    B --> E["Update Module<br/>core/update"]
+    E --> F["Network Layer<br/>core/network"]
+    F --> G["GitHub Releases API"]
+    C --> H["ContentProvider + SharedPreferences"]
+    I["LSPosed Entry<br/>com.tools.module.MainHook"] --> H
+    I --> J["NativeBridge JNI"]
+    J --> K["native_hook.cpp"]
+    K --> L["Dump Plugin"]
+    K --> M["Text Extractor / SQLite"]
+```
+
+## How It Works
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant App as Compose App
+    participant Repo as HookConfigRepository
+    participant Provider as ConfigContentProvider
+    participant Hook as LSPosed MainHook
+    participant JNI as NativeBridge
+    participant Native as native_hook.cpp
+    participant Il2Cpp as libil2cpp.so
+
+    U->>App: Configure mode / framework / targets
+    App->>Repo: Save settings
+    Repo->>Provider: Persist shared config
+    Hook->>Provider: Read config in target process
+    Hook->>JNI: Push mode / targets / JSON / backend
+    JNI->>Native: Initialize runtime
+    Native->>Il2Cpp: Wait for libil2cpp.so
+    alt Dump mode
+        Native->>Native: Run Il2CppDumper flow
+    else Text hook mode
+        Native->>Native: Install hook backend
+        Native->>Native: Log or replace Unity text
+    end
+```
+
+## Feature Set
+- **Dump workflow:** trigger Il2Cpp dump generation and export the result to the device download directory.
+- **Text interception:** install native hooks against Unity text setters and store captured text in SQLite.
+- **Parser flow:** extract `set_text` targets from `dump.cs` and persist them as method names plus JSON metadata.
 
 ## Requirements
-- Rooted device with Magisk + LSPosed (enable only one target app at a time).
-- Android 12+ (minSdk 31, targetSdk 35, compileSdk 36).
-- Default ABI: `arm64-v8a`; for other ABIs, add `app/src/main/cpp/libs/<abi>/libdobby.a` and update `ndk.abiFilters`.
-- Verified device: Google Pixel 3 XL, Android 12 (SP1A.210812.016.C2 / 8618562).
+- Rooted device with Magisk + LSPosed.
+- Android 12+ (`minSdk 31`, `targetSdk 35`, `compileSdk 36`).
+- Default ABI: `arm64-v8a`.
+  For additional ABIs, add `app/src/main/cpp/libs/<abi>/libdobby.a` and update `ndk.abiFilters`.
+- Verified device: Google Pixel 3 XL, Android 12 (`SP1A.210812.016.C2 / 8618562`).
 
 ## Quick Start
-1) Build: `./gradlew :app:assembleDebug` (CMake included, outputs `libnative_hook.so`).
-2) Install and enable the module in LSPosed (select a single target app).
-3) In the plugin app:
-   - Text mode: leave Dump off, parse `dump.cs` to auto-fill `Namespace.Class.set_text` list (no manual typing, auto-saved after parsing).
-   - The hook backend defaults to `And64InlineHook`, and the app can switch back to `Dobby Hook`.
-   - Dump mode: toggle Dump on; launch the target app to generate `dump.cs` and copy to Download.
-4) Validate in target app:
-   - Text mode: waits for `libil2cpp.so`, installs hooks, logcat tag `[il2Fusion]`; text stored at `/data/data/<pkg>/text.db`.
-   - Dump mode: waits for `libil2cpp.so`, runs dumper, shows Toast with copy result.
+1. Build the module: `./gradlew :app:assembleDebug`
+2. Install the APK and enable the module in LSPosed for a single target app.
+3. Open the il2Fusion app and choose one workflow.
+   Text hook mode:
+   Leave Dump disabled, parse `dump.cs`, and persist the target setter list.
+   Dump mode:
+   Enable Dump mode, launch the target app, and wait for `dump.cs` export.
+4. Validate runtime behavior in the target app.
+   Text hook mode:
+   Wait for `libil2cpp.so`, confirm hooks are installed, and inspect `/data/data/<pkg>/text.db`.
+   Dump mode:
+   Wait for the dump flow and check the generated file in the Download directory.
 
-## Architecture & Layout
-- LSPosed entry: `app/src/main/java/com/tools/module/MainHook.kt` (declared in `assets/xposed_init`), loads `libnative_hook.so` in `Application.attach`.
-- Config layer: `app/src/main/java/com/tools/il2fusion/config/` uses `ContentProvider` to sync dump mode, hook backend, target methods, and JSON payloads.
-- UI: `app/src/main/java/com/tools/il2fusion/ui/` contains the redesigned Compose tool interface and parser flow.
-- Native hook: `app/src/main/cpp/native_hook.cpp`, waits for `libil2cpp.so`, supports both `And64InlineHook` and `Dobby`, and writes to SQLite.
-- Il2CppDumper: `app/src/main/cpp/il2CppDumper/`, copies results to Download when possible.
-- JSON / translation flow: `app/src/main/cpp/config/` and `app/src/main/cpp/plugins/textExtractor/` handle JSON extraction, Unity text lookup, and replacement.
-- Assets: `app/src/main/assets/xposed/` for LSPosed descriptors and entry declarations.
+## Project Layout
+- `app/src/main/java/com/tools/il2fusion/app/`: app shell, navigation, startup update check, and global dialogs.
+- `app/src/main/java/com/tools/il2fusion/feature/`: page-level MVVM features for overview, mode, parse, and settings.
+- `app/src/main/java/com/tools/il2fusion/core/`: shared modules for design components, i18n, network, and update flow.
+- `app/src/main/java/com/tools/il2fusion/config/`: provider-backed shared configuration used by both app and hook process.
+- `app/src/main/java/com/tools/module/`: LSPosed entry and JNI-facing Android bridge.
+- `app/src/main/cpp/`: native hook runtime, Il2Cpp dumper integration, text extractor plugins, and SQLite support.
+- `app/src/main/assets/xposed/`: LSPosed descriptors and module entry declaration.
 
 ## Credits
 - [Rprop - And64InlineHook](https://github.com/Rprop/And64InlineHook): ARM64 inline hook implementation.
@@ -55,8 +102,8 @@ Chinese version: see [README_ZH](doc/README_ZH.md).
 - [Perfare - Zygisk-Il2CppDumper](https://github.com/Perfare/Zygisk-Il2CppDumper): Il2CppDumper implementation reference.
 
 ## Contributing
-- Issues and feature requests are welcome, please include environment, target app, and expected behavior.
-- PRs to fix bugs, add multi-ABI support, or improve UI/UX are appreciated.
+- Issues and feature requests are welcome. Include target app, Android version, LSPosed environment, expected behavior, and logs when possible.
+- PRs that improve hook stability, parser accuracy, ABI coverage, documentation, or UI/UX are welcome.
 
 ## Disclaimer
 - For learning, research, and security testing only. Do not use for illegal, infringing, or commercial purposes.
